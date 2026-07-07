@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium — an evolving ecosystem</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0b0f14; color: #cdd6e0; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; padding: 10px 14px;
+    background: rgba(11,15,20,.82); border: 1px solid #1e2936; border-radius: 8px;
+    backdrop-filter: blur(4px); user-select: none; min-width: 210px;
+  }
+  #hud h1 { font-size: 14px; font-weight: 600; letter-spacing: .04em; margin-bottom: 6px; color: #e8eef4; }
+  #hud .row { display: flex; justify-content: space-between; gap: 16px; }
+  #hud .k { color: #7d8fa3; }
+  .plants   { color: #6fce7e; }
+  .grazers  { color: #6fb7e8; }
+  .hunters  { color: #e8806f; }
+  #spark { margin-top: 8px; image-rendering: pixelated; }
+  #controls { margin-top: 8px; display: flex; gap: 6px; align-items: center; }
+  button {
+    background: #16202b; color: #cdd6e0; border: 1px solid #2a3948; border-radius: 5px;
+    padding: 3px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #1d2a38; }
+  #hint { position: fixed; bottom: 10px; left: 12px; color: #4a5a6b; font-size: 11px; user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="world"></canvas>
+<div id="hud">
+  <h1>TERRARIUM</h1>
+  <div class="row"><span class="k">tick</span><span id="tick">0</span></div>
+  <div class="row"><span class="k plants">plants</span><span id="nPlants" class="plants">0</span></div>
+  <div class="row"><span class="k grazers">grazers</span><span id="nGrazers" class="grazers">0</span></div>
+  <div class="row"><span class="k hunters">hunters</span><span id="nHunters" class="hunters">0</span></div>
+  <div class="row"><span class="k">avg speed</span><span id="avgSpeed">–</span></div>
+  <div class="row"><span class="k">avg sense</span><span id="avgSense">–</span></div>
+  <canvas id="spark" width="200" height="40"></canvas>
+  <div id="controls">
+    <button id="btnPause">pause</button>
+    <button id="btnStep">step</button>
+    <button id="btnReset">reset</button>
+  </div>
+</div>
+<div id="hint">space: pause · click: drop plants · an ecosystem that evolves while you watch</div>
+
+<script>
+"use strict";
+// ---------- Terrarium: plants grow, grazers eat plants, hunters eat grazers.
+// Creatures carry mutable genes (speed, sense, size). Evolution is emergent:
+// reproduction copies genes with noise; energy economics do the selecting.
+
+const canvas = document.getElementById("world");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0;
+function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+addEventListener("resize", resize); resize();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+// ---------- tunables
+const CFG = {
+  plantCap: 900,          // max plants in the world
+  plantSpawn: 3,          // ambient plant spawns per tick
+  plantEnergy: 22,
+  grazerStart: 90,
+  hunterStart: 9,
+  moveCostBase: 0.055,    // energy per tick, scaled by size & speed²
+  reproduceAt: 100,       // energy threshold to split
+  mutate: 0.12,           // gene noise on reproduction
+  maxAge: 3600,
+};
+
+// ---------- entities
+let plants = [], grazers = [], hunters = [];
+let tick = 0, paused = false;
+const history = []; // [plants, grazers, hunters] per sample
+
+function makePlant(x, y) {
+  return { x: x ?? rand(0, W), y: y ?? rand(0, H) };
+}
+
+function makeCreature(kind, x, y, genes) {
+  const base = kind === "grazer"
+    ? { speed: 1.1, sense: 55, size: 3.0 }
+    : { speed: 1.35, sense: 80, size: 4.2 };
+  const g = genes ?? base;
+  return {
+    kind, x, y,
+    dir: rand(0, Math.PI * 2),
+    energy: 60, age: 0,
+    speed: g.speed, sense: g.sense, size: g.size,
+  };
+}
+
+function mutateGenes(c) {
+  const m = f => f * (1 + rand(-CFG.mutate, CFG.mutate));
+  return {
+    speed: clamp(m(c.speed), 0.3, 3.2),
+    sense: clamp(m(c.sense), 15, 180),
+    size: clamp(m(c.size), 1.5, 8),
+  };
+}
+
+function seed() {
+  plants = Array.from({ length: 350 }, () => makePlant());
+  grazers = Array.from({ length: CFG.grazerStart }, () => makeCreature("grazer", rand(0, W), rand(0, H)));
+  hunters = Array.from({ length: CFG.hunterStart }, () => makeCreature("hunter", rand(0, W), rand(0, H)));
+  tick = 0; history.length = 0;
+}
+
+// ---------- behavior
+function nearest(c, list, rangeSq) {
+  let best = null, bd = rangeSq;
+  for (const t of list) {
+    const dx = t.x - c.x, dy = t.y - c.y, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+
+function stepCreature(c, food, threats, eatGain, eatRadius) {
+  c.age++;
+  // perceive
+  const senseSq = c.sense * c.sense;
+  let target = nearest(c, food, senseSq);
+  let flee = threats ? nearest(c, threats, senseSq * 0.6) : null;
+
+  // steer: flee > seek > wander
+  if (flee) {
+    c.dir = Math.atan2(c.y - flee.y, c.x - flee.x) + rand(-0.3, 0.3);
+  } else if (target) {
+    c.dir = Math.atan2(target.y - c.y, target.x - c.x) + rand(-0.15, 0.15);
+  } else {
+    c.dir += rand(-0.35, 0.35);
+  }
+
+  // move (fleeing and chasing burn harder)
+  const boost = flee ? 1.4 : (target && c.kind === "hunter") ? 1.45 : 1;
+  const v = c.speed * boost;
+  c.x = (c.x + Math.cos(c.dir) * v + W) % W;
+  c.y = (c.y + Math.sin(c.dir) * v + H) % H;
+  c.energy -= CFG.moveCostBase * c.size * (1 + v * v * 0.25) + c.sense * 0.0006;
+
+  // eat
+  if (target) {
+    const dx = target.x - c.x, dy = target.y - c.y, r = eatRadius + c.size;
+    if (dx * dx + dy * dy < r * r) { c.energy += eatGain; target.dead = true; }
+  }
+
+  // reproduce
+  if (c.energy >= CFG.reproduceAt) {
+    c.energy *= 0.45;
+    const child = makeCreature(c.kind, c.x + rand(-6, 6), c.y + rand(-6, 6), mutateGenes(c));
+    child.energy = c.energy;
+    return child;
+  }
+  return null;
+}
+
+function stepWorld() {
+  tick++;
+
+  // plants: ambient growth + local spread
+  for (let i = 0; i < CFG.plantSpawn && plants.length < CFG.plantCap; i++) plants.push(makePlant());
+  if (plants.length > 4 && plants.length < CFG.plantCap && tick % 2 === 0) {
+    const p = plants[(Math.random() * plants.length) | 0];
+    plants.push(makePlant(clamp(p.x + rand(-24, 24), 0, W), clamp(p.y + rand(-24, 24), 0, H)));
+  }
+
+  const newGrazers = [], newHunters = [];
+  for (const g of grazers) {
+    const child = stepCreature(g, plants, hunters, CFG.plantEnergy, 4);
+    if (child) newGrazers.push(child);
+  }
+  for (const h of hunters) {
+    const child = stepCreature(h, grazers, null, 55, 5);
+    if (child) newHunters.push(child);
+  }
+
+  plants = plants.filter(p => !p.dead);
+  grazers = grazers.filter(c => !c.dead && c.energy > 0 && c.age < CFG.maxAge).concat(newGrazers);
+  hunters = hunters.filter(c => !c.dead && c.energy > 0 && c.age < CFG.maxAge).concat(newHunters);
+
+  // extinction insurance: reseed a trickle so the show never fully stops
+  if (grazers.length === 0 && tick % 120 === 0) grazers.push(makeCreature("grazer", rand(0, W), rand(0, H)));
+  if (hunters.length === 0 && tick % 600 === 0) hunters.push(makeCreature("hunter", rand(0, W), rand(0, H)));
+
+  if (tick % 12 === 0) {
+    history.push([plants.length, grazers.length, hunters.length]);
+    if (history.length > 200) history.shift();
+  }
+}
+
+// ---------- render
+function draw() {
+  ctx.fillStyle = "#0b0f14";
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = "#3f9e52";
+  for (const p of plants) { ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
+
+  for (const g of grazers) {
+    const e = clamp(g.energy / CFG.reproduceAt, 0.25, 1);
+    ctx.fillStyle = `rgba(111,183,232,${0.35 + e * 0.65})`;
+    ctx.beginPath(); ctx.arc(g.x, g.y, g.size, 0, 7); ctx.fill();
+  }
+  for (const h of hunters) {
+    const e = clamp(h.energy / CFG.reproduceAt, 0.25, 1);
+    ctx.fillStyle = `rgba(232,128,111,${0.35 + e * 0.65})`;
+    ctx.beginPath();
+    ctx.moveTo(h.x + Math.cos(h.dir) * h.size * 1.6, h.y + Math.sin(h.dir) * h.size * 1.6);
+    ctx.arc(h.x, h.y, h.size, h.dir + 2.4, h.dir - 2.4);
+    ctx.fill();
+  }
+}
+
+// ---------- HUD
+const $ = id => document.getElementById(id);
+const spark = $("spark").getContext("2d");
+function avg(list, key) {
+  if (!list.length) return "–";
+  return (list.reduce((s, c) => s + c[key], 0) / list.length).toFixed(2);
+}
+function drawHud() {
+  $("tick").textContent = tick;
+  $("nPlants").textContent = plants.length;
+  $("nGrazers").textContent = grazers.length;
+  $("nHunters").textContent = hunters.length;
+  $("avgSpeed").textContent = avg(grazers, "speed");
+  $("avgSense").textContent = avg(grazers, "sense");
+
+  spark.clearRect(0, 0, 200, 40);
+  if (history.length < 2) return;
+  const max = Math.max(...history.flat(), 1);
+  const colors = ["#3f9e52", "#6fb7e8", "#e8806f"];
+  for (let s = 0; s < 3; s++) {
+    spark.strokeStyle = colors[s];
+    spark.beginPath();
+    history.forEach((h, i) => {
+      const x = (i / (history.length - 1)) * 200;
+      const y = 40 - (h[s] / max) * 38;
+      i ? spark.lineTo(x, y) : spark.moveTo(x, y);
+    });
+    spark.stroke();
+  }
+}
+
+// ---------- loop & input
+function frame() {
+  if (!paused) stepWorld();
+  draw();
+  if (tick % 6 === 0 || paused) drawHud();
+  requestAnimationFrame(frame);
+}
+
+$("btnPause").onclick = () => { paused = !paused; $("btnPause").textContent = paused ? "play" : "pause"; };
+$("btnStep").onclick = () => { if (paused) { stepWorld(); drawHud(); } };
+$("btnReset").onclick = seed;
+addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); $("btnPause").onclick(); } });
+canvas.addEventListener("click", e => {
+  for (let i = 0; i < 25; i++) plants.push(makePlant(e.clientX + rand(-30, 30), e.clientY + rand(-30, 30)));
+});
+
+seed();
+frame();
+</script>
+</body>
+</html>
