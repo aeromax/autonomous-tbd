@@ -115,22 +115,44 @@ function seed() {
   tick = 0; history.length = 0;
 }
 
-// ---------- behavior
-function nearest(c, list, rangeSq) {
-  let best = null, bd = rangeSq;
-  for (const t of list) {
-    const dx = t.x - c.x, dy = t.y - c.y, d = dx * dx + dy * dy;
-    if (d < bd) { bd = d; best = t; }
+// ---------- spatial hash grid: nearest() was O(n·m); this scans only nearby cells
+const CELL = 64;
+class Grid {
+  constructor() { this.map = new Map(); }
+  build(items) {
+    this.map.clear();
+    for (const it of items) {
+      const k = ((it.x / CELL) | 0) * 4096 + ((it.y / CELL) | 0);
+      const a = this.map.get(k);
+      a ? a.push(it) : this.map.set(k, [it]);
+    }
   }
-  return best;
+  nearest(c, range) {
+    const cx0 = Math.max(0, ((c.x - range) / CELL) | 0), cx1 = Math.min(((W - 1) / CELL) | 0, ((c.x + range) / CELL) | 0);
+    const cy0 = Math.max(0, ((c.y - range) / CELL) | 0), cy1 = Math.min(((H - 1) / CELL) | 0, ((c.y + range) / CELL) | 0);
+    let best = null, bd = range * range;
+    for (let cx = cx0; cx <= cx1; cx++) for (let cy = cy0; cy <= cy1; cy++) {
+      const a = this.map.get(cx * 4096 + cy);
+      if (!a) continue;
+      for (const t of a) {
+        if (t.dead) continue;
+        const dx = t.x - c.x, dy = t.y - c.y, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = t; }
+      }
+    }
+    return best;
+  }
 }
+const plantGrid = new Grid(), grazerGrid = new Grid(), hunterGrid = new Grid();
 
-function stepCreature(c, food, threats, eatGain, eatRadius) {
+// ---------- behavior
+const FLEE_RANGE = Math.sqrt(0.6); // flee detection is shorter than food sense
+
+function stepCreature(c, foodGrid, threatGrid, eatGain, eatRadius) {
   c.age++;
   // perceive
-  const senseSq = c.sense * c.sense;
-  let target = nearest(c, food, senseSq);
-  let flee = threats ? nearest(c, threats, senseSq * 0.6) : null;
+  let target = foodGrid.nearest(c, c.sense);
+  let flee = threatGrid ? threatGrid.nearest(c, c.sense * FLEE_RANGE) : null;
 
   // steer: flee > seek > wander
   if (flee) {
@@ -174,13 +196,17 @@ function stepWorld() {
     plants.push(makePlant(clamp(p.x + rand(-24, 24), 0, W), clamp(p.y + rand(-24, 24), 0, H)));
   }
 
+  plantGrid.build(plants);
+  grazerGrid.build(grazers);
+  hunterGrid.build(hunters);
+
   const newGrazers = [], newHunters = [];
   for (const g of grazers) {
-    const child = stepCreature(g, plants, hunters, CFG.plantEnergy, 4);
+    const child = stepCreature(g, plantGrid, hunterGrid, CFG.plantEnergy, 4);
     if (child) newGrazers.push(child);
   }
   for (const h of hunters) {
-    const child = stepCreature(h, grazers, null, 55, 5);
+    const child = stepCreature(h, grazerGrid, null, 55, 5);
     if (child) newHunters.push(child);
   }
 
