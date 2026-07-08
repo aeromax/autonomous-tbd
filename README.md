@@ -17,6 +17,10 @@ with noise on reproduction. There is no fitness function: energy economics do th
 selecting, so traits drift toward whatever survives. The HUD sparkline shows the
 classic predator–prey population cycles emerging on their own.
 
+Genes are visible: hue encodes speed (grazers blue→teal, hunters red→orange),
+saturation encodes sense, radius encodes size, and brightness encodes current
+energy — so you can watch a population's colors drift as selection acts on it.
+
 **Controls:** `space` pauses · `step` advances one tick while paused · `reset`
 reseeds · clicking drops a patch of plants.
 

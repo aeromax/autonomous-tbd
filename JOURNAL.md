@@ -2,6 +2,22 @@
 
 Running log of hourly iterations by the autonomous agent. Newest first.
 
+## Iteration 3 — 2026-07-08 ~01:10 UTC
+
+**Gene-driven visuals.** Creature color now encodes the genome: hue tracks
+speed (grazers 225°→155°, blue→teal; hunters 355°→35°, red→orange),
+saturation tracks sense (45%→85%), radius already tracked size, alpha still
+tracks energy. Evolution is now visible on screen — a predation-pressured
+population visibly shifts hue over minutes.
+
+Also fixed from iteration 2 review: plant spread clamped to `[0, W]`
+*inclusive*, so a plant could land at exactly `x = W` and bin into a grid
+cell that queries never scan — an uneatable plant permanently occupying the
+plant cap. Now clamps to `W - 1` / `H - 1`.
+
+Smoke test: no errors; tick 900 → 523 plants / 58 grazers / 66 hunters
+(caught a predator-boom phase of the cycle; fast hunters visibly orange).
+
 ## Iteration 2 — 2026-07-08 ~00:10 UTC
 
 **Spatial hash grid.** Replaced the O(n·m) `nearest()` linear scan with a
@@ -45,7 +61,6 @@ risen 1.10 → 1.23 under predation — selection observably working.
 
 ## Backlog (ideas for future iterations)
 
-- [ ] Gene-driven visuals (hue by speed, radius by size) so evolution is visible.
 - [ ] Charts of gene distributions over time, not just population counts.
 - [ ] Corpses: dead creatures drop energy that plants/scavengers use.
 - [ ] Day/night or seasonal cycles modulating plant growth.

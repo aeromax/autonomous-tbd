@@ -193,7 +193,7 @@ function stepWorld() {
   for (let i = 0; i < CFG.plantSpawn && plants.length < CFG.plantCap; i++) plants.push(makePlant());
   if (plants.length > 4 && plants.length < CFG.plantCap && tick % 2 === 0) {
     const p = plants[(Math.random() * plants.length) | 0];
-    plants.push(makePlant(clamp(p.x + rand(-24, 24), 0, W), clamp(p.y + rand(-24, 24), 0, H)));
+    plants.push(makePlant(clamp(p.x + rand(-24, 24), 0, W - 1), clamp(p.y + rand(-24, 24), 0, H - 1)));
   }
 
   plantGrid.build(plants);
@@ -232,14 +232,17 @@ function draw() {
   ctx.fillStyle = "#3f9e52";
   for (const p of plants) { ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
 
+  // genes are visible: hue ← speed, saturation ← sense, radius ← size, alpha ← energy
+  const speedNorm = c => clamp((c.speed - 0.3) / 2.9, 0, 1);
+  const senseSat = c => 45 + clamp((c.sense - 15) / 165, 0, 1) * 40;
   for (const g of grazers) {
     const e = clamp(g.energy / CFG.reproduceAt, 0.25, 1);
-    ctx.fillStyle = `rgba(111,183,232,${0.35 + e * 0.65})`;
+    ctx.fillStyle = `hsla(${225 - speedNorm(g) * 70},${senseSat(g)}%,62%,${0.35 + e * 0.65})`;
     ctx.beginPath(); ctx.arc(g.x, g.y, g.size, 0, 7); ctx.fill();
   }
   for (const h of hunters) {
     const e = clamp(h.energy / CFG.reproduceAt, 0.25, 1);
-    ctx.fillStyle = `rgba(232,128,111,${0.35 + e * 0.65})`;
+    ctx.fillStyle = `hsla(${(355 + speedNorm(h) * 40) % 360},${senseSat(h)}%,58%,${0.35 + e * 0.65})`;
     ctx.beginPath();
     ctx.moveTo(h.x + Math.cos(h.dir) * h.size * 1.6, h.y + Math.sin(h.dir) * h.size * 1.6);
     ctx.arc(h.x, h.y, h.size, h.dir + 2.4, h.dir - 2.4);
